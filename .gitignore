@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Local policy and runtime data can identify repositories; never commit either.
+policy.json
+.cerebrum/

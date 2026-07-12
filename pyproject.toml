@@ -1,0 +1,8 @@
+[project]
+name = "cerebrum-relay"
+version = "0.1.0"
+description = "Read-only, allowlisted stdio relay for Cortex"
+requires-python = ">=3.10"
+
+[project.scripts]
+cerebrum-relay = "cerebrum_relay:main"
