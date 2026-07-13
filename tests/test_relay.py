@@ -37,7 +37,7 @@ class RelayTests(unittest.TestCase):
 
     def test_never_offers_network_or_maintenance_tools(self):
         names = {tool["name"] for tool in relay.tool_schemas()}
-        self.assertEqual({"cerebrum_status", "cerebrum_health", "cerebrum_query", "cerebrum_context"}, names)
+        self.assertEqual({"cerebrum_status", "cerebrum_health", "cerebrum_query", "cerebrum_context", "cerebrum_phoenix_audit", "cerebrum_phoenix_context"}, names)
 
 
 if __name__ == "__main__":

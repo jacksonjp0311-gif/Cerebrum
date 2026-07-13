@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from phoenix_adapter import PhoenixPolicy, audit_boundary, build_context_packet
+
 
 MAX_RESPONSE_BYTES = 256_000
 READ_TOOLS = {
@@ -17,6 +19,10 @@ READ_TOOLS = {
     "cerebrum_health": ("health", True),
     "cerebrum_query": ("query", True),
     "cerebrum_context": ("context", True),
+}
+PHOENIX_TOOLS = {
+    "cerebrum_phoenix_audit",
+    "cerebrum_phoenix_context",
 }
 
 
@@ -26,6 +32,8 @@ class Policy:
     max_query_characters: int = 2000
     max_results: int = 10
     command_timeout_seconds: int = 20
+    phoenix_root: str | None = None
+    phoenix_allow_logs: bool = False
 
 
 def policy_path() -> Path:
@@ -42,11 +50,18 @@ def load_policy(path: Path | None = None) -> Policy:
     repos = raw.get("allowed_repositories", [])
     if not isinstance(repos, list) or not all(isinstance(repo, str) and repo for repo in repos):
         raise ValueError("Policy allowlist is invalid")
+    phoenix_root_raw = raw.get("phoenix_root")
+    phoenix_root: str | None = None
+    if isinstance(phoenix_root_raw, str) and phoenix_root_raw.strip():
+        phoenix_root = phoenix_root_raw.strip()
+
     return Policy(
         allowed_repositories=frozenset(repos),
         max_query_characters=_bounded_int(raw.get("max_query_characters", 2000), 1, 10_000),
         max_results=_bounded_int(raw.get("max_results", 10), 1, 25),
         command_timeout_seconds=_bounded_int(raw.get("command_timeout_seconds", 20), 1, 60),
+        phoenix_root=phoenix_root,
+        phoenix_allow_logs=bool(raw.get("phoenix_allow_logs", False)),
     )
 
 
@@ -96,7 +111,34 @@ def _allowed_repo(arguments: dict[str, Any], policy: Policy) -> str:
     return repo
 
 
+def _handle_phoenix_tool(
+    name: str, arguments: dict[str, Any], policy: Policy
+) -> dict[str, Any]:
+    """Dispatch Phoenix adapter tools."""
+    if not policy.phoenix_root:
+        raise PermissionError("Phoenix integration is not configured")
+    root_path = Path(policy.phoenix_root).expanduser()
+    if not root_path.is_dir():
+        raise RuntimeError("Phoenix root directory does not exist")
+
+    phoenix_policy = PhoenixPolicy(
+        phoenix_root=root_path,
+        allow_log_files=policy.phoenix_allow_logs,
+    )
+
+    if name == "cerebrum_phoenix_audit":
+        return audit_boundary(phoenix_policy)
+    elif name == "cerebrum_phoenix_context":
+        return build_context_packet(phoenix_policy)
+    else:
+        raise PermissionError("Unknown Phoenix tool")
+
+
 def handle_tool_call(name: str, arguments: dict[str, Any], policy: Policy) -> dict[str, Any]:
+    # ── Phoenix adapter tools (local, no Cortex subprocess) ──
+    if name in PHOENIX_TOOLS:
+        return _handle_phoenix_tool(name, arguments, policy)
+
     if name not in READ_TOOLS:
         raise PermissionError("Tool is not available")
     command_name, needs_repo = READ_TOOLS[name]
@@ -121,12 +163,20 @@ def handle_tool_call(name: str, arguments: dict[str, Any], policy: Policy) -> di
 
 
 def tool_schemas() -> list[dict[str, Any]]:
-    return [
+    schemas = [
         {"name": "cerebrum_status", "description": "Read status for an allowlisted Cortex repository.", "inputSchema": {"type": "object", "properties": {"repo_name": {"type": "string"}}, "required": ["repo_name"]}},
         {"name": "cerebrum_health", "description": "Read health for an allowlisted Cortex repository.", "inputSchema": {"type": "object", "properties": {"repo_name": {"type": "string"}}, "required": ["repo_name"]}},
         {"name": "cerebrum_query", "description": "Query an allowlisted Cortex repository without indexing or changing it.", "inputSchema": {"type": "object", "properties": {"repo_name": {"type": "string"}, "query": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["repo_name", "query"]}},
         {"name": "cerebrum_context", "description": "Read a bounded context packet from an allowlisted Cortex repository.", "inputSchema": {"type": "object", "properties": {"repo_name": {"type": "string"}, "task": {"type": "string"}}, "required": ["repo_name", "task"]}},
     ]
+    # Phoenix tools are only listed when configured
+    schemas.append(
+        {"name": "cerebrum_phoenix_audit", "description": "Audit the Phoenix integration boundary: list which files would be allowed or denied. Does not read file contents.", "inputSchema": {"type": "object", "properties": {}}}
+    )
+    schemas.append(
+        {"name": "cerebrum_phoenix_context", "description": "Build a context packet from explicitly allowed Phoenix files (source code, schemas, public docs). Private memory, identity files, and credentials are always excluded.", "inputSchema": {"type": "object", "properties": {}}}
+    )
+    return schemas
 
 
 def handle_request(request: dict[str, Any], policy: Policy) -> dict[str, Any] | None:
