@@ -2,5 +2,8 @@
   "allowed_repositories": [],
   "max_query_characters": 2000,
   "max_results": 10,
-  "command_timeout_seconds": 20
+  "command_timeout_seconds": 20,
+
+  "phoenix_root": null,
+  "phoenix_allow_logs": false
 }
